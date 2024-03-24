@@ -333,11 +333,13 @@ function compute-ibdbench-result {
 	function compute-ibdbench-metrics {
 		POD_NAME=$1
 		
-		echo -en "$($BIN_AWK '{printf $6}')\t"
-		echo -en "$($BIN_AWK '{printf "=%.2f+%.2f+%.2f+%.2f+%.2f",$1,$2,$3,$4,$5}')\t"
+		AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-server.avg)
+		echo -en "$($BIN_AWK '{printf $6}' <<< $AVGMETRICS)\t"
+		echo -en "$($BIN_AWK '{printf "=%.2f+%.2f+%.2f+%.2f+%.2f",$1,$2,$3,$4,$5}' <<< $AVGMETRICS)\t"
 
-		echo -en "$($BIN_AWK '{printf $6}')\t"
-		echo -en "$($BIN_AWK '{printf "=%.2f+%.2f+%.2f+%.2f+%.2f",$1,$2,$3,$4,$5}')"
+		AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-client.avg)
+		echo -en "$($BIN_AWK '{printf $6}' <<< $AVGMETRICS)\t"
+		echo -en "$($BIN_AWK '{printf "=%.2f+%.2f+%.2f+%.2f+%.2f",$1,$2,$3,$4,$5}' <<< $AVGMETRICS)"
 	}
 
 	# MTU
@@ -1075,7 +1077,7 @@ echo $DISCOVERED_KERNEL > $DATADIR/kernel
 #--- K8S Version Detection --------------------------------
 
 info "Detecting Kubernetes version"
-DISCOVERED_K8S_VERSION=$(kubectl version | awk '$1=="Server" {print $3}' )
+DISCOVERED_K8S_VERSION=$(kubectl version --short | awk '$1=="Server" {print $3}' )
 $DEBUG && debug "Discovered k8s version is $DISCOVERED_K8S_VERSION"
 echo $DISCOVERED_K8S_VERSION > $DATADIR/k8s-version
 
