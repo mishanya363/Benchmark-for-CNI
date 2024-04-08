@@ -1,5 +1,5 @@
 !/bin/bash
-for run in $(seq 17 18)
+for run in $(seq 1 100)
 do
     RESULT_FILE_PREFIX="test_$run"
     ./knb -v -cn worker-node-1 -sn worker-node-2 -ot p2ptcp,p2pudp -o ibdbench -f /root/Benchmark-for-CNI/results/csv/$RESULT_FILE_PREFIX.csv
