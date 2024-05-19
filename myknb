@@ -88,11 +88,12 @@ function run-client {
 	spec:
 	  containers:
 	  - name: iperf
-	    image: mishanya363/alpine-iperf3
+	    image: docker.io/mishanya363/alpine-iperf3
 	    args:
 	    - /bin/sh
 	    - -c
 	    - $CMD
+	    imagePullPolicy: IfNotPresent
 	  nodeSelector:
 	    kubernetes.io/hostname: $CLIENT_NODE
 	  restartPolicy: Never
@@ -263,7 +264,8 @@ metadata:
 spec:
   containers:
   - name: monitor
-    image: mishanya363/alpine-monitor
+    image: docker.io/mishanya363/alpine-monitor
+    imagePullPolicy: IfNotPresent
   nodeSelector:
     kubernetes.io/hostname: $SERVER_NODE
 EOF
@@ -286,7 +288,8 @@ metadata:
 spec:
   containers:
   - name: monitor
-    image: mishanya363/alpine-monitor
+    image: docker.io/mishanya363/alpine-monitor
+    imagePullPolicy: IfNotPresent
   nodeSelector:
     kubernetes.io/hostname: $CLIENT_NODE
 EOF
@@ -312,10 +315,11 @@ metadata:
 spec:
   containers:
   - name: iperf
-    image: mishanya363/alpine-iperf3
+    image: docker.io/mishanya363/alpine-iperf3
     args:
     - iperf3
     - -s
+    imagePullPolicy: IfNotPresent
   nodeSelector:
     kubernetes.io/hostname: $SERVER_NODE
 ---

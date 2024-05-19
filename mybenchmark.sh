@@ -53,8 +53,8 @@ if [ "$verbose" = "true" ]; then
 		./myknb -f $res
 		check=$?
 		[ $check -ne 0 ] && { echo "Не получилось провести тест, ошибка $check, окончание скрипта ...";  exit 1; }
-		printf "|||||||||||Тест $run окончен|||||||||||\n"
-		sleep 5
+		printf "|||||||||||Тест $run окончен|||||||||||"
+		printf "\n"
 	done
 else
 	for run in $(seq 1 $num)
@@ -63,7 +63,7 @@ else
                 ./myknb -f $res > /dev/null
 		check=$?
                 [ $check -ne 0 ] && { echo "Не получилось провести тест, ошибка $check, окончание скрипта ..."; exit 1; }
-		printf "|||||||||||Тест $run окончен|||||||||||\n"
-		sleep 5
+		printf "|||||||||||Тест $run окончен|||||||||||"
+		printf "\n"
         done
 fi
