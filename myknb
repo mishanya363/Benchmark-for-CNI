@@ -1,0 +1,422 @@
+#!/bin/bash
+#==============================================================================
+# Служебные функции
+#==============================================================================
+
+function logdate { date "+%Y-%m-%d %H:%M:%S"; }
+function now { date +%s; }
+function cleanandexit {
+	# Очистка ресурсов Kubernetes
+	for i in $RESSOURCE_TO_CLEAN_BEFORE_EXIT
+	do
+		kubectl delete $i --wait=false >/dev/null
+	done
+	# Очистка временной директории
+	if [ "$CLEANDIR" = "true" ] 
+	then
+		[ ! -z "$DATADIR" ] && [ -d $DATADIR ] && touch $DATADIR/something && rm $DATADIR/* && rmdir $DATADIR
+	else
+		echo "Папка с данными не удалена, удалите её самостоятельно"
+		echo "$DATADIR"
+	fi
+	exit $1
+}
+function waitpod {
+	POD=$1
+	PHASE=$2
+	TIMEOUT=$3
+	TMAX=$(( $(now) + $TIMEOUT ))
+	while [ "$(now)" -lt "$TMAX" ]
+	do
+		CURRENTPHASE=$(kubectl get --request-timeout 2s pod $POD -o jsonpath={.status.phase})
+		[ "$CURRENTPHASE" = "$PHASE" ] && return 0
+		sleep 1
+	done
+	return 1
+}
+
+#==============================================================================
+# Переменные
+#==============================================================================
+
+BENCHMARK_DATE=$(date -u "+%Y-%m-%d %H:%M:%S")
+SERVER_NODE="worker-node-1"
+CLIENT_NODE="worker-node-2"
+EXECID="$$"
+BENCHMARK_DURATION="10"
+RESSOURCE_TO_CLEAN_BEFORE_EXIT=""
+FILENAME="/dev/stdout"
+CLEANDIR="true"
+FROM_DATA="false"
+POD_WAIT_TIMEOUT="60"
+
+RUN_TEST_IDLE="false"
+RUN_TEST_P2P_TCP="true"
+RUN_TEST_P2P_UDP="true"
+RUN_TEST_P2S_TCP="false"
+RUN_TEST_P2S_UDP="false"
+
+export LC_ALL=C
+BIN_AWK="awk"
+
+#==============================================================================
+# Основные функции
+#==============================================================================
+
+function run-client {
+	POD_NAME=$1
+	TARGET=$2
+
+	CMD=""
+	case $3 in
+		idle) CMD="sleep $BENCHMARK_DURATION; echo 0 0 0 0 0 0 0 receiver" ;;
+		udp) CMD="iperf3 -u -b 0 -c $TARGET -O 1 -f m -t $BENCHMARK_DURATION" ;;
+		tcp) CMD="iperf3 -c $TARGET -O 1 -f m -t $BENCHMARK_DURATION" ;;
+		*) echo "Неизвестный тип бенчмарка '$2'"
+		       cleanandexit 1 
+		       ;;
+	esac
+
+	echo "Запуск пода $POD_NAME на узле $CLIENT_NODE"
+	cat <<-EOF | kubectl apply -f - >/dev/null|| { echo "Невозможно создать под $POD_NAME"; cleanandexit 1; }
+	apiVersion: v1
+	kind: Pod
+	metadata:
+	  labels:
+	    app: $POD_NAME
+	  name: $POD_NAME
+	spec:
+	  containers:
+	  - name: iperf
+	    image: mishanya363/alpine-iperf3
+	    args:
+	    - /bin/sh
+	    - -c
+	    - $CMD
+	  nodeSelector:
+	    kubernetes.io/hostname: $CLIENT_NODE
+	  restartPolicy: Never
+	EOF
+
+	RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$POD_NAME"
+	# Ожидание запуска пода
+	kubectl wait --for=condition=Ready pod/$POD_NAME \
+		--timeout=${POD_WAIT_TIMEOUT}s >/dev/null 2>/dev/null \
+		|| { echo "Не получилось запустить под $POD_NAME до таймаута"; cleanandexit 1; }
+	
+	STARTTIME=$(now)
+	ENDTIME=$(( $STARTTIME + $BENCHMARK_DURATION ))
+
+	# Ожидание прохода теста
+	sleep $BENCHMARK_DURATION
+
+	echo "Ожидание завершения пода $POD_NAME"
+	# Waiting for test to be succeeded
+	waitpod $POD_NAME Succeeded $POD_WAIT_TIMEOUT \
+		|| { echo "Не получилось завершить под $POD_NAME до таймаута"; cleanandexit 1; }
+
+	# Получение данных
+	kubectl logs $POD_NAME > $DATADIR/$POD_NAME.log
+	grep receiver $DATADIR/$POD_NAME.log | $BIN_AWK '{print $7}' > $DATADIR/$POD_NAME.bw
+
+	kubectl exec $MONITOR_SERVER_POD_NAME \
+		-- sh /stats.sh $STARTTIME $ENDTIME > $DATADIR/$POD_NAME-server.metrics
+
+	
+	tail -n +2 $DATADIR/$POD_NAME-server.metrics | LC_ALL=C $BIN_AWK '{M+=$3;U+=$1;S+=$2; } 
+		END {
+			print "cpu-user cpu-system memory-used records-number"; 
+			printf "%.2f %.2f %d %d\n",U/NR,S/NR,M/NR,NR
+		}' > $DATADIR/$POD_NAME-server.avg
+
+	kubectl exec $MONITOR_CLIENT_POD_NAME \
+		-- sh /stats.sh $STARTTIME $ENDTIME > $DATADIR/$POD_NAME-client.metrics
+
+	tail -n +2 $DATADIR/$POD_NAME-client.metrics | $BIN_AWK '{M+=$3;U+=$1;S+=$2; } 
+		END {
+			print "cpu-user cpu-system memory-used records-number"; 
+			printf "%.2f %.2f %d %d\n",U/NR,S/NR,M/NR,NR
+		}' > $DATADIR/$POD_NAME-client.avg
+}
+
+function compute-ibdbench-result {
+	function compute-ibdbench-metrics {
+		POD_NAME=$1
+		
+		AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-server.avg)
+		echo -en "$($BIN_AWK '{printf $3}' <<< $AVGMETRICS)\t"
+		echo -en "$($BIN_AWK '{sum=$1+$2; printf "%.2f", sum}' <<< $AVGMETRICS)\t"
+
+		AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-client.avg)
+		echo -en "$($BIN_AWK '{printf $3}' <<< $AVGMETRICS)\t"
+		echo -en "$($BIN_AWK '{sum=$1+$2; printf "%.2f", sum}' <<< $AVGMETRICS)"
+	}
+
+	# Простой
+	if [ "$IDLE_POD_NAME" != "" ]
+	then
+		compute-ibdbench-metrics $IDLE_POD_NAME
+		echo -en "\t"
+	fi
+	
+	# P2P TCP
+	if [ "$CLIENT_TCP_P2P_POD_NAME" != "" ]
+	then
+		echo -en "$(cat $DATADIR/$CLIENT_TCP_P2P_POD_NAME.bw)\t"
+		compute-ibdbench-metrics $CLIENT_TCP_P2P_POD_NAME
+		echo -en "\t"
+	fi
+	
+	# P2P UDP
+	if [ "$CLIENT_UDP_P2P_POD_NAME" != "" ]
+	then
+		echo -en "$(cat $DATADIR/$CLIENT_UDP_P2P_POD_NAME.bw)\t"
+		compute-ibdbench-metrics $CLIENT_UDP_P2P_POD_NAME
+		echo -en "\t"
+	fi
+	
+	# P2S TCP
+	if [ "$CLIENT_TCP_P2S_POD_NAME" != "" ]
+	then
+		echo -en "$(cat $DATADIR/$CLIENT_TCP_P2S_POD_NAME.bw)\t"
+		compute-ibdbench-metrics $CLIENT_TCP_P2S_POD_NAME
+		echo -en "\t"
+	fi
+	
+	# P2S UDP
+	if [ "$CLIENT_UDP_P2S_POD_NAME" != "" ]
+	then
+		echo -en "$(cat $DATADIR/$CLIENT_UDP_P2S_POD_NAME.bw)\t"
+		compute-ibdbench-metrics $CLIENT_UDP_P2S_POD_NAME
+	fi
+}
+
+	
+
+function generate-report {
+	compute-ibdbench-result >> $FILENAME
+	printf "\n" >> $FILENAME
+}
+
+#==============================================================================
+# Опции
+#==============================================================================
+
+while [ "$1" != "" ]
+do
+	arg=$1
+	case $arg in
+		--file|-f)
+			shift
+			[ "$1" = "" ] && echo "После флага $arg должно быть значение"
+			FILENAME="$1"
+                        [ "$FILENAME" = "-" ] && FILENAME="/dev/stdout"
+			;;
+	esac
+	shift
+done
+
+#==============================================================================
+# Подготовка
+#==============================================================================
+
+DATADIR="$(mktemp -d)"
+
+# Создание имён подов
+MONITOR_SERVER_POD_NAME="knb-monitor-server-$EXECID"
+MONITOR_CLIENT_POD_NAME="knb-monitor-client-$EXECID"
+SERVER_POD_NAME="knb-server-$EXECID"
+SERVER_SERVICE_NAME=$SERVER_POD_NAME
+
+IDLE_POD_NAME=""
+CLIENT_TCP_P2P_POD_NAME=""
+CLIENT_UDP_P2P_POD_NAME=""
+CLIENT_TCP_P2S_POD_NAME=""
+CLIENT_UDP_P2S_POD_NAME=""
+
+$RUN_TEST_IDLE && IDLE_POD_NAME="knb-client-idle-$EXECID"
+$RUN_TEST_P2P_TCP && CLIENT_TCP_P2P_POD_NAME="knb-client-tcp-p2p-$EXECID"
+$RUN_TEST_P2P_UDP && CLIENT_UDP_P2P_POD_NAME="knb-client-udp-p2p-$EXECID"
+$RUN_TEST_P2S_TCP && CLIENT_TCP_P2S_POD_NAME="knb-client-tcp-p2s-$EXECID"
+$RUN_TEST_P2S_UDP && CLIENT_UDP_P2S_POD_NAME="knb-client-udp-p2s-$EXECID"
+
+# Обнаружение CTRL-C
+trap ctrl_c INT
+function ctrl_c {
+        echo "Обнаружено CTRL-C, окончание скрипта ..."
+		cleanandexit 1
+}
+
+#==============================================================================
+# Запуск серверов для мониторинга
+#==============================================================================
+echo "==========Подготовка к тестам=========="
+#--- Сервер для мониторинга --------------------------------
+echo "Развертывание сервера для мониторинга на узле $SERVER_NODE"
+cat <<EOF | kubectl apply -f - >/dev/null || { echo "Невозможно создать сервер для мониторинга"; cleanandexit 1; }
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: $MONITOR_SERVER_POD_NAME
+  name: $MONITOR_SERVER_POD_NAME
+spec:
+  containers:
+  - name: monitor
+    image: mishanya363/alpine-monitor
+  nodeSelector:
+    kubernetes.io/hostname: $SERVER_NODE
+EOF
+
+RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$MONITOR_SERVER_POD_NAME"
+
+echo "Ожидание запуска сервера для мониторинга ..."
+waitpod $MONITOR_SERVER_POD_NAME Running $POD_WAIT_TIMEOUT \
+	|| { echo "Не получилось запустить сервер для мониторинга до таймаута"; cleanandexit 1; }
+
+#--- Клиент для мониторинга --------------------------------
+echo "Развертывание клиента для мониторинга на узле $CLIENT_NODE"
+cat <<EOF | kubectl apply -f - >/dev/null|| { echo "Невозможно создать клиент для мониторинга"; cleanandexit 1; }
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: $MONITOR_CLIENT_POD_NAME
+  name: $MONITOR_CLIENT_POD_NAME
+spec:
+  containers:
+  - name: monitor
+    image: mishanya363/alpine-monitor
+  nodeSelector:
+    kubernetes.io/hostname: $CLIENT_NODE
+EOF
+
+RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$MONITOR_CLIENT_POD_NAME"
+
+echo "Ожидание запуска клиента для мониторинга ..."
+waitpod $MONITOR_CLIENT_POD_NAME Running $POD_WAIT_TIMEOUT \
+	|| { echo "Не получилось запустить клиент для мониторинга до таймаута"; cleanandexit 1; }
+
+#==============================================================================
+# Запуск сервера с iperf
+#==============================================================================
+
+echo "Развертывание сервера с iperf на узле $SERVER_NODE"
+cat <<EOF | kubectl apply -f - >/dev/null|| { echo "Невозможно создать сервер"; cleanandexit 1; }
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: $SERVER_POD_NAME
+  name: $SERVER_POD_NAME
+spec:
+  containers:
+  - name: iperf
+    image: mishanya363/alpine-iperf3
+    args:
+    - iperf3
+    - -s
+  nodeSelector:
+    kubernetes.io/hostname: $SERVER_NODE
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: $SERVER_SERVICE_NAME
+spec:
+  selector:
+    app: $SERVER_POD_NAME
+  ports:
+    - protocol: TCP
+      port: 5201
+      targetPort: 5201
+      name: tcp
+    - protocol: UDP
+      port: 5201
+      targetPort: 5201
+      name: udp
+EOF
+
+RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$SERVER_POD_NAME"
+
+echo "Ожидание запуска сервера ..."
+kubectl wait --for=condition=Ready pod/$SERVER_POD_NAME --timeout=${POD_WAIT_TIMEOUT}s >/dev/null \
+	|| { echo "Не получилось запустить сервер" до таймаута; cleanandexit 1; }
+
+SERVER_IP=$(kubectl get pod $SERVER_POD_NAME -o jsonpath={.status.podIP})
+
+#==============================================================================
+# Получение данных
+#==============================================================================
+
+#--- Обнаружение версии Kubernetes --------------------------------
+
+echo "Обнаружение версии Kubernetes ..."
+DISCOVERED_K8S_VERSION=$(kubectl version | awk '$1=="Server" {print $3}' )
+echo "Обнаруженная версия Kubernetes: $DISCOVERED_K8S_VERSION"
+
+#--- Обнаружение MTU ----------------------------------------
+
+echo "Обнаружение MTU ..."
+CNI_MTU=$(kubectl exec $SERVER_POD_NAME -- ip link \
+	| grep "UP,LOWER_UP" | grep -v LOOPBACK | grep -oE "mtu [0-9]*"| $BIN_AWK '{print $2}')
+echo "Обнаруженное MTU: $CNI_MTU"
+
+#==============================================================================
+# Проведение тестов
+#==============================================================================
+echo "=============Запуск тестов============="
+#--- Измерение в простое  -------------------------------------
+
+if [ "$IDLE_POD_NAME" != "" ]
+then
+	run-client $IDLE_POD_NAME $SERVER_IP idle
+else
+	echo "Пропуск теста в простое"
+fi
+
+#--- Pod to pod -------------------------------------------
+
+if [ "$CLIENT_TCP_P2P_POD_NAME" != "" ]
+then
+	run-client $CLIENT_TCP_P2P_POD_NAME $SERVER_IP tcp
+else
+	echo "Пропуск P2P TCP теста"
+fi
+
+if [ "$CLIENT_UDP_P2P_POD_NAME" != "" ]
+then
+	run-client $CLIENT_UDP_P2P_POD_NAME $SERVER_IP udp
+else
+	echo "Пропуск P2P UDP теста"
+fi
+
+#--- Pod to Service ---------------------------------------
+
+if [ "$CLIENT_TCP_P2S_POD_NAME" != "" ]
+then
+	run-client $CLIENT_TCP_P2S_POD_NAME $SERVER_SERVICE_NAME tcp
+else
+	echo "Пропуск P2S TCP теста"
+fi
+
+if [ "$CLIENT_UDP_P2S_POD_NAME" != "" ]
+then
+	run-client $CLIENT_UDP_P2S_POD_NAME $SERVER_SERVICE_NAME udp
+else
+	echo "Пропуск P2S UDP теста"
+fi
+
+#==============================================================================
+# Вывод
+#==============================================================================
+
+generate-report
+
+#==============================================================================
+# Очистка
+#==============================================================================
+
+echo "Очистка ресурсов Kubernetes ..."
+printf "=============Тесты окончены============\n"
+cleanandexit
