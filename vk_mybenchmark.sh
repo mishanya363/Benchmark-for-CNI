@@ -3,6 +3,10 @@
 num=1
 file="unknown"
 verbose="false"
+#Создание папки
+if [ ! -d "results-vk" ]; then
+	mkdir "results-vk"
+fi
 res=results-vk/$file.csv
 
 #Опции
@@ -41,10 +45,6 @@ do
 	esac
 	shift
 done
-#Создание папки
-if [ ! -d "results" ]; then
-	mkdir "results"
-fi
 
 if [ "$verbose" = "true" ]; then
 	for run in $(seq 1 $num)
