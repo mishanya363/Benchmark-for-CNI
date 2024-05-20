@@ -3,7 +3,7 @@
 num=1
 file="unknown"
 verbose="false"
-res=results/$file.csv
+res=results-vk/$file.csv
 
 #Опции
 while [ "$1" != "" ]
@@ -20,7 +20,7 @@ do
 			shift
 			[ "$1" = "" ] && { echo "После параметра $arg должно идти значение"; exit 1; }
 			file="$1"
-			res=results/$file.csv
+			res=results-vk/$file.csv
 			if [ -e $res ]; then
 				rm $res
 				touch $res
