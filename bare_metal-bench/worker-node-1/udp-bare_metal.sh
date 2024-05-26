@@ -70,8 +70,8 @@ do
 	#Запускаем измерение
 	ssh -qT worker-node-2 "nohup ./iperf.sh udp &" > $bwfile
 	#Записываем результаты в файл
-	nohup ./stats.sh $STARTTIME $ENDTIME $workfile $file $bwfile 2>/dev/null &
-	ssh -qT worker-node-2 "nohup ./stats.sh $STARTTIME $ENDTIME $workfile $file 2>/dev/null &"
+	nohup ./stats.sh $STARTTIME $ENDTIME $workfile $file $bwfile >/dev/null 2>/dev/null &
+	ssh -qT worker-node-2 "nohup ./stats.sh $STARTTIME $ENDTIME $workfile $file >/dev/null 2>/dev/null &"
 	#"Убиваем" "мониторы" и удаляем временные папки
 	kill $mpid
 	ssh -qT worker-node-2 <<-EOF
