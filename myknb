@@ -49,11 +49,11 @@ FILENAME="/dev/stdout"
 CLEANDIR="true"
 POD_WAIT_TIMEOUT="60"
 
-RUN_TEST_IDLE="false"
+RUN_TEST_IDLE="true"
 RUN_TEST_P2P_TCP="true"
 RUN_TEST_P2P_UDP="true"
-RUN_TEST_P2S_TCP="false"
-RUN_TEST_P2S_UDP="false"
+RUN_TEST_P2S_TCP="true"
+RUN_TEST_P2S_UDP="true"
 
 export LC_ALL=C
 BIN_AWK="awk"
@@ -340,7 +340,7 @@ spec:
       name: udp
 EOF
 
-RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$SERVER_POD_NAME"
+RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$SERVER_POD_NAME service/$SERVER_SERVICE_NAME"
 
 echo "Ожидание запуска сервера ..."
 kubectl wait --for=condition=Ready pod/$SERVER_POD_NAME --timeout=${POD_WAIT_TIMEOUT}s >/dev/null \
