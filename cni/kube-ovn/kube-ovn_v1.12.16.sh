@@ -29,6 +29,7 @@ ENABLE_IC=${ENABLE_IC:-$(kubectl get node --show-labels | grep -q "ovn.kubernete
 EXCHANGE_LINK_NAME=${EXCHANGE_LINK_NAME:-false}
 # The nic to support container network can be a nic name or a group of regex
 # separated by comma, if empty will use the nic that the default route use
+IFACE=enp3s0
 IFACE=${IFACE:-}
 # Specifies the name of the dpdk tunnel iface.
 # Note that the dpdk tunnel iface and tunnel ip cidr should be diffierent with Kubernetes api cidr, otherwise the route will be a problem.
@@ -84,7 +85,7 @@ TUNNEL_TYPE="geneve"                              # geneve, vxlan or stt. ATTENT
 POD_NIC_TYPE="veth-pair"                          # veth-pair or internal-port
 
 # VLAN Config only take effect when NETWORK_TYPE is vlan
-VLAN_INTERFACE_NAME=""
+VLAN_INTERFACE_NAME="eth1"
 VLAN_ID="100"
 
 if [ "$ENABLE_VLAN" = "true" ]; then
