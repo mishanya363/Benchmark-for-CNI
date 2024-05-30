@@ -5,7 +5,7 @@
 
 #Переменные по умолчанию
 num=1
-file="results-udp"
+file="results-udp.csv"
 #Служебные функции
 function now { date +%s; }
 trap ctrl_c INT

@@ -4,7 +4,7 @@
 
 #Переменные по умолчанию
 num=1
-file="results-tcp"
+file="results-tcp.csv"
 #Служебные функции
 function now { date +%s; }
 trap ctrl_c INT
